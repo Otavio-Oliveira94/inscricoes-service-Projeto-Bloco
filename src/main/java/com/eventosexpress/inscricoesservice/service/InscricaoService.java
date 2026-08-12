@@ -1,11 +1,15 @@
 package com.eventosexpress.inscricoesservice.service;
 
+import com.eventosexpress.inscricoesservice.client.EventoClient;
 import com.eventosexpress.inscricoesservice.dto.InscricaoRequestDTO;
 import com.eventosexpress.inscricoesservice.dto.InscricaoResponseDTO;
+import com.eventosexpress.inscricoesservice.exception.EventoNaoEncontradoException;
+import com.eventosexpress.inscricoesservice.exception.EventoServiceIndisponivelException;
 import com.eventosexpress.inscricoesservice.exception.InscricaoNaoEncontradaException;
 import com.eventosexpress.inscricoesservice.mapper.InscricaoMapper;
 import com.eventosexpress.inscricoesservice.model.Inscricao;
 import com.eventosexpress.inscricoesservice.repository.InscricaoRepository;
+import feign.FeignException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -15,13 +19,24 @@ import java.util.List;
 public class InscricaoService {
     private final InscricaoRepository inscricaoRepository;
     private final InscricaoMapper inscricaoMapper;
+    private final EventoClient eventoClient;
 
-    public InscricaoService(InscricaoRepository inscricaoRepository, InscricaoMapper inscricaoMapper) {
+      public InscricaoService(InscricaoRepository inscricaoRepository, InscricaoMapper inscricaoMapper, EventoClient eventoClient) {
         this.inscricaoRepository = inscricaoRepository;
         this.inscricaoMapper = inscricaoMapper;
+        this.eventoClient = eventoClient;
     }
 
     public InscricaoResponseDTO criar(InscricaoRequestDTO dto) {
+        /*Inscricao inscricao = inscricaoMapper.paraEntidade(dto);
+
+        inscricao.setDataInscricao(LocalDateTime.now());
+
+        Inscricao inscricaoSalva = inscricaoRepository.save(inscricao);
+
+        return inscricaoMapper.paraResponseDTO(inscricaoSalva);*/
+        validarEvento(dto.getEventoId());
+
         Inscricao inscricao = inscricaoMapper.paraEntidade(dto);
 
         inscricao.setDataInscricao(LocalDateTime.now());
@@ -54,6 +69,7 @@ public class InscricaoService {
 
     public InscricaoResponseDTO editar(Long id, InscricaoRequestDTO dto) {
         Inscricao inscricao = buscarEntidadePorId(id);
+        validarEvento(dto.getEventoId());
 
         inscricaoMapper.atualizarEntidade(inscricao, dto);
 
@@ -73,5 +89,15 @@ public class InscricaoService {
                 .orElseThrow(
                         () -> new InscricaoNaoEncontradaException(id)
                 );
+    }
+
+    private void validarEvento(Long eventoId) {
+          try{
+              eventoClient.buscarPorId(eventoId);
+          } catch (FeignException.NotFound exception) {
+              throw new EventoNaoEncontradoException(eventoId);
+          } catch (FeignException exception) {
+              throw new EventoServiceIndisponivelException();
+          }
     }
 }

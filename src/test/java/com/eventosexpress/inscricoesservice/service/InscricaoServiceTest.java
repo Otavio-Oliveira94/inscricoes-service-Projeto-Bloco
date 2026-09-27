@@ -1,5 +1,6 @@
 package com.eventosexpress.inscricoesservice.service;
 
+import com.eventosexpress.inscricoesservice.auditoria.AuditoriaService;
 import com.eventosexpress.inscricoesservice.client.EventoClient;
 import com.eventosexpress.inscricoesservice.client.dto.EventoClientResponseDTO;
 import com.eventosexpress.inscricoesservice.dto.InscricaoRequestDTO;
@@ -36,6 +37,9 @@ public class InscricaoServiceTest {
 
     @Mock
     private EventoClient eventoClient;
+
+    @Mock
+    private AuditoriaService auditoriaService;
 
     @InjectMocks
     private InscricaoService inscricaoService;
@@ -131,6 +135,7 @@ public class InscricaoServiceTest {
 
         verify(eventoClient).buscarPorId(1L);
         verify(inscricaoRepository).save(inscricao);
+        verify(auditoriaService).registrar("CRIACAO", 10L, null, responseDTO);
     }
 
     @Test
@@ -157,7 +162,8 @@ public class InscricaoServiceTest {
 
         verifyNoInteractions(
                 inscricaoMapper,
-                inscricaoRepository
+                inscricaoRepository,
+                auditoriaService
         );
     }
 
@@ -178,7 +184,8 @@ public class InscricaoServiceTest {
 
         verifyNoInteractions(
                 inscricaoMapper,
-                inscricaoRepository
+                inscricaoRepository,
+                auditoriaService
         );
     }
 
@@ -264,6 +271,10 @@ public class InscricaoServiceTest {
         when(inscricaoMapper.paraResponseDTO(inscricaoAtualizada))
                 .thenReturn(respostaAtualizada);
 
+        InscricaoResponseDTO respostaAnterior = new InscricaoResponseDTO(
+                10L, 1L, "Nome Antigo", "antigo@email.com", dataOriginal);
+        doReturn(respostaAnterior).when(inscricaoMapper).paraResponseDTO(inscricaoExistente);
+
         InscricaoResponseDTO resultado =
                 inscricaoService.editar(
                         10L,
@@ -290,6 +301,7 @@ public class InscricaoServiceTest {
         verify(inscricaoMapper).atualizarEntidade(inscricaoExistente, dtoEditado);
 
         verify(inscricaoRepository).save(inscricaoExistente);
+        verify(auditoriaService).registrar("ATUALIZACAO", 10L, respostaAnterior, respostaAtualizada);
     }
 
     @Test
@@ -297,10 +309,12 @@ public class InscricaoServiceTest {
     void deveExcluirInscricaoExistente() {
         when(inscricaoRepository.findById(10L))
                 .thenReturn(Optional.of(inscricaoSalva));
+        when(inscricaoMapper.paraResponseDTO(inscricaoSalva)).thenReturn(responseDTO);
 
         inscricaoService.remover(10L);
 
         verify(inscricaoRepository).delete(inscricaoSalva);
+        verify(auditoriaService).registrar("EXCLUSAO", 10L, responseDTO, null);
     }
 
     @Test

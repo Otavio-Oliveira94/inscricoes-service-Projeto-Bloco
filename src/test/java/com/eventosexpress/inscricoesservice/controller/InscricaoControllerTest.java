@@ -1,10 +1,7 @@
 package com.eventosexpress.inscricoesservice.controller;
 
-
-import com.eventosexpress.inscricoesservice.client.EventoClient;
 import com.eventosexpress.inscricoesservice.dto.InscricaoRequestDTO;
 import com.eventosexpress.inscricoesservice.dto.InscricaoResponseDTO;
-import com.eventosexpress.inscricoesservice.exception.EventoServiceIndisponivelException;
 import com.eventosexpress.inscricoesservice.exception.InscricaoNaoEncontradaException;
 import com.eventosexpress.inscricoesservice.service.InscricaoService;
 import org.junit.jupiter.api.DisplayName;
@@ -14,6 +11,11 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import com.eventosexpress.inscricoesservice.model.StatusInscricao;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.util.UUID;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -33,22 +35,16 @@ public class InscricaoControllerTest {
     @MockitoBean
     private InscricaoService inscricaoService;
 
-    @MockitoBean
-    private EventoClient eventoClient;
-
     private InscricaoResponseDTO criarResposta() {
         return new InscricaoResponseDTO(
                 10L,
                 1L,
                 "Otavio Oliveira",
                 "otavio@email.com",
-                LocalDateTime.of(
-                        2026,
-                        8,
-                        13,
-                        10,
-                        30
-                )
+                LocalDateTime.of(2026, 8, 13, 10, 30),
+                StatusInscricao.PENDENTE,
+                UUID.randomUUID(),
+                null
         );
     }
 
@@ -76,7 +72,7 @@ public class InscricaoControllerTest {
                                         }
                                         """)
                 )
-                .andExpect(status().isCreated())
+                .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.id").value(10))
                 .andExpect(
                         jsonPath("$.eventoId").value(1)
@@ -88,6 +84,8 @@ public class InscricaoControllerTest {
                 .andExpect(
                         jsonPath("$.emailParticipante")
                                 .value("otavio@email.com")
+                )
+                .andExpect(jsonPath("$.status").value("PENDENTE")
                 );
     }
 
@@ -225,37 +223,28 @@ public class InscricaoControllerTest {
     }
 
     @Test
-    @DisplayName(
-            "POST deve retornar 503 quando eventos estiver indisponível"
-    )
-    void deveRetornar503QuandoServicoIndisponivel()
-            throws Exception {
-        when(
-                inscricaoService.criar(
-                        any(InscricaoRequestDTO.class)
-                )
-        ).thenThrow(
-                new EventoServiceIndisponivelException()
-        );
+    @DisplayName("POST deve retornar 400 para eventoId inválido")
+    void deveRetornar400ParaEventoIdInvalido() throws Exception {
+        when(inscricaoService.criar(any(InscricaoRequestDTO.class)))
+                .thenThrow(
+                        new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST,
+                                "Informe um eventoId maior que zero."
+                        )
+                );
 
         mockMvc.perform(
                         post("/inscricoes")
-                                .contentType(
-                                        MediaType.APPLICATION_JSON
-                                )
+                                .contentType(MediaType.APPLICATION_JSON)
                                 .content("""
-                                        {
-                                          "eventoId": 1,
-                                          "nomeParticipante":
-                                            "Participante",
-                                          "emailParticipante":
-                                            "participante@email.com"
-                                        }
-                                        """)
+                                    {
+                                      "eventoId": 0,
+                                      "nomeParticipante": "Participante",
+                                      "emailParticipante": "teste@email.com"
+                                    }
+                                    """)
                 )
-                .andExpect(
-                        status().isServiceUnavailable()
-                );
+                .andExpect(status().isBadRequest());
     }
 
 }

@@ -1,6 +1,5 @@
 package com.eventosexpress.inscricoesservice.repository;
 
-import com.eventosexpress.inscricoesservice.client.EventoClient;
 import com.eventosexpress.inscricoesservice.model.Inscricao;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -8,7 +7,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.util.List;
 
@@ -24,9 +22,6 @@ public class InscricaoRepositoryTest {
 
     @PersistenceContext
     private EntityManager entityManager;
-
-    @MockitoBean
-    private EventoClient eventoClient;
 
     private Inscricao criarInscricao(
             Long eventoId,

@@ -1,11 +1,9 @@
 package com.eventosexpress.inscricoesservice.auditoria;
 
-import com.eventosexpress.inscricoesservice.client.EventoClient;
-import com.eventosexpress.inscricoesservice.client.dto.EventoClientResponseDTO;
 import com.eventosexpress.inscricoesservice.dto.InscricaoRequestDTO;
+import com.eventosexpress.inscricoesservice.mensageria.PublicadorRabbitConfiavel;
 import com.eventosexpress.inscricoesservice.repository.InscricaoRepository;
 import com.eventosexpress.inscricoesservice.service.InscricaoService;
-import feign.FeignException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,30 +23,33 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
+@SpringBootTest(properties = {"spring.rabbitmq.listener.simple.auto-startup=false"})
 @AutoConfigureMockMvc
 public class AuditoriaIntegrationTest {
     private static final Path ARQUIVO = criarArquivoTemporario();
     @Autowired
     MockMvc mvc;
+
     @Autowired
     JsonMapper jsonMapper;
+
     @Autowired
     InscricaoService service;
+
     @Autowired
     InscricaoRepository repository;
+
     @Autowired AuditoriaService auditoria;
+
     @Autowired
     PlatformTransactionManager transactionManager;
+
     @MockitoBean
-    EventoClient eventoClient;
+    private PublicadorRabbitConfiavel publicadorRabbitConfiavel;
 
     private static Path criarArquivoTemporario() {
         try {
@@ -68,7 +69,6 @@ public class AuditoriaIntegrationTest {
     void preparar() throws IOException {
         repository.deleteAll();
         Files.writeString(ARQUIVO, "");
-        when(eventoClient.buscarPorId(anyLong())).thenReturn(new EventoClientResponseDTO());
     }
 
     private String dados(String nome) {
@@ -80,7 +80,7 @@ public class AuditoriaIntegrationTest {
     private long criar(String nome) throws Exception {
         var resultado = mvc.perform(post("/inscricoes").contentType(MediaType.APPLICATION_JSON)
                         .content(dados(nome)))
-                .andExpect(status().isCreated()).andReturn();
+                .andExpect(status().isAccepted()).andReturn();
         return jsonMapper.readTree(resultado.getResponse().getContentAsString()).path("id").asLong();
     }
 
@@ -154,11 +154,35 @@ public class AuditoriaIntegrationTest {
     }
 
     @Test
-    void eventoInexistenteNaoGeraHistorico() throws Exception {
-        when(eventoClient.buscarPorId(anyLong())).thenThrow(mock(FeignException.NotFound.class));
-        mvc.perform(post("/inscricoes").contentType(MediaType.APPLICATION_JSON).content(dados("Teste")))
-                .andExpect(status().isNotFound());
-        assertTrue(auditoria.consultar(null, null, 100).isEmpty());
-        assertEquals(0, repository.count());
+    void solicitacaoPendenteGeraHistoricoAntesDaValidacao()
+            throws Exception {
+
+        mvc.perform(
+                        post("/inscricoes")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("""
+                                    {
+                                      "eventoId": 999999,
+                                      "nomeParticipante": "Participante",
+                                      "emailParticipante": "teste@email.com"
+                                    }
+                                    """)
+                )
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("PENDENTE"));
+
+        assertEquals(1, repository.count());
+
+        var historico = auditoria.consultar(null, null, 100);
+
+        assertEquals(1, historico.size());
+
+        assertEquals(
+                "PENDENTE",
+                historico.getFirst()
+                        .path("depois")
+                        .path("status")
+                        .asText()
+        );
     }
 }

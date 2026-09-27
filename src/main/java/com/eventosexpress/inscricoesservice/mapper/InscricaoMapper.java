@@ -32,7 +32,10 @@ public class InscricaoMapper {
                 inscricao.getEventoId(),
                 inscricao.getNomeParticipante(),
                 inscricao.getEmailParticipante(),
-                inscricao.getDataInscricao()
+                inscricao.getDataInscricao(),
+                inscricao.getStatus(),
+                inscricao.getSolicitacaoId(),
+                inscricao.getMotivoRejeicao()
         );
     }
 }

@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Entity
 @Data
@@ -33,4 +34,34 @@ public class Inscricao {
             updatable = false
     )
     private LocalDateTime dataInscricao;
+
+    @Enumerated(EnumType.STRING)
+    @Column(
+            nullable = false,
+            columnDefinition = "varchar(20) default 'CONFIRMADA'"
+    )
+    private StatusInscricao status = StatusInscricao.CONFIRMADA;
+
+    private UUID solicitacaoId;
+
+    private String motivoRejeicao;
+
+    public Inscricao(
+            Long id,
+            Long eventoId,
+            String nomeParticipante,
+            String emailParticipante,
+            LocalDateTime dataInscricao
+    ) {
+        this(
+                id,
+                eventoId,
+                nomeParticipante,
+                emailParticipante,
+                dataInscricao,
+                StatusInscricao.CONFIRMADA,
+                null,
+                null
+        );
+    }
 }

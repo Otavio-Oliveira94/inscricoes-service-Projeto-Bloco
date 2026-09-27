@@ -1,17 +1,13 @@
 package com.eventosexpress.inscricoesservice.service;
 
+import com.eventosexpress.contratos.EventoValidadoParaInscricao;
 import com.eventosexpress.inscricoesservice.auditoria.AuditoriaService;
-import com.eventosexpress.inscricoesservice.client.EventoClient;
-import com.eventosexpress.inscricoesservice.client.dto.EventoClientResponseDTO;
 import com.eventosexpress.inscricoesservice.dto.InscricaoRequestDTO;
 import com.eventosexpress.inscricoesservice.dto.InscricaoResponseDTO;
-import com.eventosexpress.inscricoesservice.exception.EventoNaoEncontradoException;
-import com.eventosexpress.inscricoesservice.exception.EventoServiceIndisponivelException;
 import com.eventosexpress.inscricoesservice.exception.InscricaoNaoEncontradaException;
 import com.eventosexpress.inscricoesservice.mapper.InscricaoMapper;
 import com.eventosexpress.inscricoesservice.model.Inscricao;
 import com.eventosexpress.inscricoesservice.repository.InscricaoRepository;
-import feign.FeignException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,13 +15,22 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import com.eventosexpress.contratos.ValidarEventoParaInscricao;
+import com.eventosexpress.inscricoesservice.model.StatusInscricao;
+import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 
 @ExtendWith(MockitoExtension.class)
 public class InscricaoServiceTest {
@@ -36,10 +41,10 @@ public class InscricaoServiceTest {
     private InscricaoMapper inscricaoMapper;
 
     @Mock
-    private EventoClient eventoClient;
+    private AuditoriaService auditoriaService;
 
     @Mock
-    private AuditoriaService auditoriaService;
+    private ApplicationEventPublisher applicationEventPublisher;
 
     @InjectMocks
     private InscricaoService inscricaoService;
@@ -48,7 +53,6 @@ public class InscricaoServiceTest {
     private Inscricao inscricao;
     private Inscricao inscricaoSalva;
     private InscricaoResponseDTO responseDTO;
-    private EventoClientResponseDTO eventoValido;
 
     @BeforeEach
     void prepararDados() {
@@ -90,102 +94,111 @@ public class InscricaoServiceTest {
                 "otavio@email.com",
                 dataInscricao
         );
-
-        eventoValido =
-                new EventoClientResponseDTO();
-
-        eventoValido.setId(1L);
-        eventoValido.setTitulo("Evento Teste");
     }
 
     @Test
-    @DisplayName("Deve criar inscrição quando o evento existir")
-    void deveCriarInscricaoQuandoEventoExistir() {
-        when(eventoClient.buscarPorId(1L))
-                .thenReturn(eventoValido);
-
+    @DisplayName("Deve criar inscrição pendente e solicitar validação")
+    void deveCriarInscricaoPendenteESolicitarValidacao() {
         when(inscricaoMapper.paraEntidade(requestDTO))
                 .thenReturn(inscricao);
 
         when(inscricaoRepository.save(inscricao))
-                .thenReturn(inscricaoSalva);
+                .thenAnswer(invocation -> {
+                    Inscricao entidade = invocation.getArgument(0);
+                    entidade.setId(10L);
+                    return entidade;
+                });
 
-        when(inscricaoMapper.paraResponseDTO(inscricaoSalva))
-                .thenReturn(responseDTO);
+        when(inscricaoMapper.paraResponseDTO(inscricao))
+                .thenAnswer(invocation ->
+                        new InscricaoMapper().paraResponseDTO(
+                                invocation.getArgument(0)
+                        )
+                );
 
-        InscricaoResponseDTO resultado = inscricaoService.criar(requestDTO);
+        InscricaoResponseDTO resultado =
+                inscricaoService.criar(requestDTO);
+
+        ArgumentCaptor<ValidarEventoParaInscricao> captor =
+                ArgumentCaptor.forClass(
+                        ValidarEventoParaInscricao.class
+                );
+
+        verify(applicationEventPublisher)
+                .publishEvent(captor.capture());
+
+        ValidarEventoParaInscricao mensagem =
+                captor.getValue();
 
         assertAll(
+                () -> assertEquals(10L, resultado.getId()),
+                () -> assertEquals(
+                        StatusInscricao.PENDENTE,
+                        resultado.getStatus()
+                ),
+                () -> assertNotNull(
+                        resultado.getSolicitacaoId()
+                ),
+                () -> assertNotNull(
+                        resultado.getDataInscricao()
+                ),
+                () -> assertNotNull(
+                        mensagem.mensagemId()
+                ),
+                () -> assertEquals(
+                        1,
+                        mensagem.versaoMensagem()
+                ),
                 () -> assertEquals(
                         10L,
-                        resultado.getId()
+                        mensagem.inscricaoId()
                 ),
                 () -> assertEquals(
                         1L,
-                        resultado.getEventoId()
+                        mensagem.eventoId()
                 ),
                 () -> assertEquals(
-                        "Otavio Oliveira",
-                        resultado.getNomeParticipante()
-                ),
-                () -> assertNotNull(
-                        inscricao.getDataInscricao()
+                        resultado.getSolicitacaoId(),
+                        mensagem.solicitacaoId()
                 )
         );
 
-        verify(eventoClient).buscarPorId(1L);
-        verify(inscricaoRepository).save(inscricao);
-        verify(auditoriaService).registrar("CRIACAO", 10L, null, responseDTO);
-    }
-
-    @Test
-    @DisplayName("Não deve salvar inscrição quando o evento não existir")
-    void naoDeveSalvarQuandoEventoNaoExistir() {
-        InscricaoRequestDTO dtoInvalido =
-                new InscricaoRequestDTO(
-                        999L,
-                        "Participante",
-                        "participante@email.com"
-                );
-
-        FeignException.NotFound erroNotFound = mock(FeignException.NotFound.class);
-
-        when(eventoClient.buscarPorId(999L))
-                .thenThrow(erroNotFound);
-
-        assertThrows(
-                EventoNaoEncontradoException.class,
-                () -> inscricaoService.criar(
-                        dtoInvalido
-                )
-        );
-
-        verifyNoInteractions(
-                inscricaoMapper,
-                inscricaoRepository,
-                auditoriaService
+        verify(auditoriaService).registrar(
+                "CRIACAO",
+                10L,
+                null,
+                resultado
         );
     }
 
     @Test
-    @DisplayName("Não deve salvar quando o serviço de eventos estiver indisponível")
-    void naoDeveSalvarQuandoServicoIndisponivel() {
-        FeignException erroFeign = mock(FeignException.class);
+    @DisplayName("Deve rejeitar eventoId ausente, zero ou negativo")
+    void deveRejeitarEventoIdInvalido() {
+        for (Long eventoId : new Long[]{null, 0L, -1L}) {
+            InscricaoRequestDTO dto =
+                    new InscricaoRequestDTO(
+                            eventoId,
+                            "Participante",
+                            "participante@email.com"
+                    );
 
-        when(eventoClient.buscarPorId(1L))
-                .thenThrow(erroFeign);
+            ResponseStatusException erro =
+                    assertThrows(
+                            ResponseStatusException.class,
+                            () -> inscricaoService.criar(dto)
+                    );
 
-        assertThrows(
-                EventoServiceIndisponivelException.class,
-                () -> inscricaoService.criar(
-                        requestDTO
-                )
-        );
+            assertEquals(
+                    400,
+                    erro.getStatusCode().value()
+            );
+        }
 
         verifyNoInteractions(
                 inscricaoMapper,
                 inscricaoRepository,
-                auditoriaService
+                auditoriaService,
+                applicationEventPublisher
         );
     }
 
@@ -198,7 +211,8 @@ public class InscricaoServiceTest {
         when(inscricaoMapper.paraResponseDTO(inscricaoSalva))
                 .thenReturn(responseDTO);
 
-        List<InscricaoResponseDTO> resultados = inscricaoService.buscarPorEvento(1L);
+        List<InscricaoResponseDTO> resultados =
+                inscricaoService.buscarPorEvento(1L);
 
         assertEquals(1, resultados.size());
         assertEquals(
@@ -206,115 +220,179 @@ public class InscricaoServiceTest {
                 resultados.getFirst().getId()
         );
 
-        verify(inscricaoRepository).findByEventoId(1L);
+        verify(inscricaoRepository)
+                .findByEventoId(1L);
     }
 
     @Test
-    @DisplayName("Deve editar uma inscrição")
-    void deveEditarInscricao() {
-        LocalDateTime dataOriginal =
+    @DisplayName("Deve solicitar nova validação ao alterar o evento")
+    void deveSolicitarNovaValidacaoAoAlterarEvento() {
+        LocalDateTime dataInscricao =
                 LocalDateTime.of(
                         2026,
-                        8,
-                        13,
-                        10,
+                        9,
+                        27,
+                        19,
                         30
                 );
 
-        Inscricao inscricaoExistente =
-                new Inscricao(
-                        10L,
-                        1L,
-                        "Nome Antigo",
-                        "antigo@email.com",
-                        dataOriginal
-                );
+        Inscricao existente = new Inscricao(
+                10L,
+                1L,
+                "Nome Antigo",
+                "antigo@email.com",
+                dataInscricao
+        );
 
-        InscricaoRequestDTO dtoEditado =
+        InscricaoRequestDTO dto =
                 new InscricaoRequestDTO(
                         2L,
-                        "Nome Atualizado",
-                        "atualizado@email.com"
+                        "Novo Nome",
+                        "novo@email.com"
                 );
 
-        Inscricao inscricaoAtualizada =
-                new Inscricao(
-                        10L,
-                        2L,
-                        "Nome Atualizado",
-                        "atualizado@email.com",
-                        dataOriginal
-                );
+        InscricaoMapper mapperReal =
+                new InscricaoMapper();
 
-        InscricaoResponseDTO respostaAtualizada =
-                new InscricaoResponseDTO(
-                        10L,
-                        2L,
-                        "Nome Atualizado",
-                        "atualizado@email.com",
-                        dataOriginal
-                );
+        when(
+                inscricaoRepository
+                        .buscarPorIdComBloqueio(10L)
+        ).thenReturn(Optional.of(existente));
 
-        EventoClientResponseDTO segundoEvento = new EventoClientResponseDTO();
+        when(
+                inscricaoMapper.paraResponseDTO(
+                        any(Inscricao.class)
+                )
+        ).thenAnswer(invocation -> {
+            Inscricao entidade =
+                    invocation.getArgument(0);
 
-        segundoEvento.setId(2L);
+            return mapperReal.paraResponseDTO(entidade);
+        });
 
-        when(inscricaoRepository.findById(10L))
-                .thenReturn(Optional.of(inscricaoExistente));
+        doAnswer(invocation -> {
+            mapperReal.atualizarEntidade(existente, dto);
+            return null;
+        }).when(inscricaoMapper)
+                .atualizarEntidade(existente, dto);
 
-        when(eventoClient.buscarPorId(2L))
-                .thenReturn(segundoEvento);
+        when(inscricaoRepository.save(existente))
+                .thenReturn(existente);
 
-        when(inscricaoRepository.save(inscricaoExistente))
-                .thenReturn(inscricaoAtualizada);
-
-        when(inscricaoMapper.paraResponseDTO(inscricaoAtualizada))
-                .thenReturn(respostaAtualizada);
-
-        InscricaoResponseDTO respostaAnterior = new InscricaoResponseDTO(
-                10L, 1L, "Nome Antigo", "antigo@email.com", dataOriginal);
-        doReturn(respostaAnterior).when(inscricaoMapper).paraResponseDTO(inscricaoExistente);
-
-        InscricaoResponseDTO resultado =
-                inscricaoService.editar(
-                        10L,
-                        dtoEditado
-                );
+        InscricaoResponseDTO resposta =
+                inscricaoService.editar(10L, dto);
 
         assertAll(
                 () -> assertEquals(
-                        "Nome Atualizado",
-                        resultado.getNomeParticipante()
+                        10L,
+                        resposta.getId()
                 ),
                 () -> assertEquals(
                         2L,
-                        resultado.getEventoId()
+                        resposta.getEventoId()
                 ),
                 () -> assertEquals(
-                        dataOriginal,
-                        resultado.getDataInscricao()
+                        "Novo Nome",
+                        resposta.getNomeParticipante()
+                ),
+                () -> assertEquals(
+                        "novo@email.com",
+                        resposta.getEmailParticipante()
+                ),
+                () -> assertEquals(
+                        dataInscricao,
+                        resposta.getDataInscricao()
+                ),
+                () -> assertEquals(
+                        StatusInscricao.PENDENTE,
+                        resposta.getStatus()
+                ),
+                () -> assertNotNull(
+                        resposta.getSolicitacaoId()
+                ),
+                () -> assertNull(
+                        resposta.getMotivoRejeicao()
                 )
         );
 
-        verify(eventoClient).buscarPorId(2L);
+        ArgumentCaptor<ValidarEventoParaInscricao> captor =
+                ArgumentCaptor.forClass(
+                        ValidarEventoParaInscricao.class
+                );
 
-        verify(inscricaoMapper).atualizarEntidade(inscricaoExistente, dtoEditado);
+        verify(applicationEventPublisher)
+                .publishEvent(captor.capture());
 
-        verify(inscricaoRepository).save(inscricaoExistente);
-        verify(auditoriaService).registrar("ATUALIZACAO", 10L, respostaAnterior, respostaAtualizada);
+        ValidarEventoParaInscricao mensagem =
+                captor.getValue();
+
+        assertAll(
+                () -> assertNotNull(
+                        mensagem.mensagemId()
+                ),
+                () -> assertEquals(
+                        1,
+                        mensagem.versaoMensagem()
+                ),
+                () -> assertEquals(
+                        10L,
+                        mensagem.inscricaoId()
+                ),
+                () -> assertEquals(
+                        2L,
+                        mensagem.eventoId()
+                ),
+                () -> assertEquals(
+                        resposta.getSolicitacaoId(),
+                        mensagem.solicitacaoId()
+                )
+        );
+
+        verify(inscricaoRepository)
+                .buscarPorIdComBloqueio(10L);
+
+        verify(inscricaoMapper)
+                .atualizarEntidade(existente, dto);
+
+        verify(inscricaoRepository)
+                .save(existente);
+
+        verify(auditoriaService).registrar(
+                eq("ATUALIZACAO"),
+                eq(10L),
+                any(InscricaoResponseDTO.class),
+                any(InscricaoResponseDTO.class)
+        );
+
     }
 
     @Test
     @DisplayName("Deve excluir uma inscrição existente")
     void deveExcluirInscricaoExistente() {
-        when(inscricaoRepository.findById(10L))
-                .thenReturn(Optional.of(inscricaoSalva));
-        when(inscricaoMapper.paraResponseDTO(inscricaoSalva)).thenReturn(responseDTO);
+        when(
+                inscricaoRepository
+                        .buscarPorIdComBloqueio(10L)
+        ).thenReturn(Optional.of(inscricaoSalva));
+
+        when(
+                inscricaoMapper
+                        .paraResponseDTO(inscricaoSalva)
+        ).thenReturn(responseDTO);
 
         inscricaoService.remover(10L);
 
-        verify(inscricaoRepository).delete(inscricaoSalva);
-        verify(auditoriaService).registrar("EXCLUSAO", 10L, responseDTO, null);
+        verify(inscricaoRepository)
+                .buscarPorIdComBloqueio(10L);
+
+        verify(inscricaoRepository)
+                .delete(inscricaoSalva);
+
+        verify(auditoriaService).registrar(
+                "EXCLUSAO",
+                10L,
+                responseDTO,
+                null
+        );
     }
 
     @Test
@@ -325,18 +403,275 @@ public class InscricaoServiceTest {
 
         assertThrows(
                 InscricaoNaoEncontradaException.class,
-                () -> inscricaoService.buscarPorId(
-                        999L
+                () -> inscricaoService.buscarPorId(999L)
+        );
+
+        verify(inscricaoRepository)
+                .findById(999L);
+
+        verifyNoInteractions(inscricaoMapper);
+    }
+
+    @Test
+    @DisplayName("Deve confirmar inscrição quando o evento existir")
+    void deveConfirmarInscricaoQuandoEventoExistir() {
+        UUID solicitacaoId =
+                UUID.randomUUID();
+
+        Inscricao inscricaoPendente =
+                new Inscricao(
+                        10L,
+                        1L,
+                        "Otavio Oliveira",
+                        "otavio@email.com",
+                        LocalDateTime.of(
+                                2026,
+                                9,
+                                27,
+                                19,
+                                30
+                        ),
+                        StatusInscricao.PENDENTE,
+                        solicitacaoId,
+                        null
+                );
+
+        EventoValidadoParaInscricao resultado =
+                new EventoValidadoParaInscricao(
+                        UUID.randomUUID(),
+                        1,
+                        Instant.now(),
+                        solicitacaoId,
+                        10L,
+                        1L,
+                        true,
+                        null
+                );
+
+        InscricaoMapper mapperReal =
+                new InscricaoMapper();
+
+        when(
+                inscricaoRepository
+                        .buscarPorIdComBloqueio(10L)
+        ).thenReturn(
+                Optional.of(inscricaoPendente)
+        );
+
+        when(
+                inscricaoMapper.paraResponseDTO(
+                        any(Inscricao.class)
+                )
+        ).thenAnswer(invocation -> {
+            Inscricao entidade =
+                    invocation.getArgument(0);
+
+            return mapperReal.paraResponseDTO(entidade);
+        });
+
+        when(
+                inscricaoRepository.save(
+                        inscricaoPendente
+                )
+        ).thenReturn(inscricaoPendente);
+
+        inscricaoService.aplicarResultadoValidacao(
+                resultado
+        );
+
+        assertAll(
+                () -> assertEquals(
+                        StatusInscricao.CONFIRMADA,
+                        inscricaoPendente.getStatus()
+                ),
+                () -> assertNull(
+                        inscricaoPendente
+                                .getMotivoRejeicao()
                 )
         );
 
-        verify(
+        verify(inscricaoRepository)
+                .buscarPorIdComBloqueio(10L);
+
+        verify(inscricaoRepository)
+                .save(inscricaoPendente);
+
+        verify(auditoriaService).registrar(
+                eq("ATUALIZACAO"),
+                eq(10L),
+                any(InscricaoResponseDTO.class),
+                any(InscricaoResponseDTO.class)
+        );
+    }
+
+    @Test
+    @DisplayName("Deve rejeitar inscrição quando o evento não existir")
+    void deveRejeitarInscricaoQuandoEventoNaoExistir() {
+        UUID solicitacaoId =
+                UUID.randomUUID();
+
+        Inscricao inscricaoPendente =
+                new Inscricao(
+                        10L,
+                        999999L,
+                        "Otavio Oliveira",
+                        "otavio@email.com",
+                        LocalDateTime.of(
+                                2026,
+                                9,
+                                27,
+                                19,
+                                30
+                        ),
+                        StatusInscricao.PENDENTE,
+                        solicitacaoId,
+                        null
+                );
+
+        EventoValidadoParaInscricao resultado =
+                new EventoValidadoParaInscricao(
+                        UUID.randomUUID(),
+                        1,
+                        Instant.now(),
+                        solicitacaoId,
+                        10L,
+                        999999L,
+                        false,
+                        "Evento nao encontrado."
+                );
+
+        InscricaoMapper mapperReal =
+                new InscricaoMapper();
+
+        when(
                 inscricaoRepository
-        ).findById(999L);
+                        .buscarPorIdComBloqueio(10L)
+        ).thenReturn(
+                Optional.of(inscricaoPendente)
+        );
+
+        when(
+                inscricaoMapper.paraResponseDTO(
+                        any(Inscricao.class)
+                )
+        ).thenAnswer(invocation -> {
+            Inscricao entidade =
+                    invocation.getArgument(0);
+
+            return mapperReal.paraResponseDTO(entidade);
+        });
+
+        when(
+                inscricaoRepository.save(
+                        inscricaoPendente
+                )
+        ).thenReturn(inscricaoPendente);
+
+        inscricaoService.aplicarResultadoValidacao(
+                resultado
+        );
+
+        assertAll(
+                () -> assertEquals(
+                        StatusInscricao.REJEITADA,
+                        inscricaoPendente.getStatus()
+                ),
+                () -> assertEquals(
+                        "Evento nao encontrado.",
+                        inscricaoPendente
+                                .getMotivoRejeicao()
+                )
+        );
+
+        verify(inscricaoRepository)
+                .buscarPorIdComBloqueio(10L);
+
+        verify(inscricaoRepository)
+                .save(inscricaoPendente);
+
+        verify(auditoriaService).registrar(
+                eq("ATUALIZACAO"),
+                eq(10L),
+                any(InscricaoResponseDTO.class),
+                any(InscricaoResponseDTO.class)
+        );
+    }
+
+    @Test
+    @DisplayName("Deve ignorar resposta de uma solicitação antiga")
+    void deveIgnorarRespostaDeSolicitacaoAntiga() {
+        UUID solicitacaoAtual =
+                UUID.randomUUID();
+
+        UUID solicitacaoAntiga =
+                UUID.randomUUID();
+
+        Inscricao inscricaoPendente =
+                new Inscricao(
+                        10L,
+                        2L,
+                        "Otavio Oliveira",
+                        "otavio@email.com",
+                        LocalDateTime.of(
+                                2026,
+                                9,
+                                27,
+                                19,
+                                30
+                        ),
+                        StatusInscricao.PENDENTE,
+                        solicitacaoAtual,
+                        null
+                );
+
+        EventoValidadoParaInscricao respostaAntiga =
+                new EventoValidadoParaInscricao(
+                        UUID.randomUUID(),
+                        1,
+                        Instant.now(),
+                        solicitacaoAntiga,
+                        10L,
+                        1L,
+                        true,
+                        null
+                );
+
+        when(
+                inscricaoRepository
+                        .buscarPorIdComBloqueio(10L)
+        ).thenReturn(
+                Optional.of(inscricaoPendente)
+        );
+
+        inscricaoService.aplicarResultadoValidacao(
+                respostaAntiga
+        );
+
+        assertAll(
+                () -> assertEquals(
+                        StatusInscricao.PENDENTE,
+                        inscricaoPendente.getStatus()
+                ),
+                () -> assertEquals(
+                        solicitacaoAtual,
+                        inscricaoPendente
+                                .getSolicitacaoId()
+                ),
+                () -> assertNull(
+                        inscricaoPendente
+                                .getMotivoRejeicao()
+                )
+        );
+
+        verify(inscricaoRepository)
+                .buscarPorIdComBloqueio(10L);
+
+        verify(inscricaoRepository, never())
+                .save(any(Inscricao.class));
 
         verifyNoInteractions(
-                eventoClient,
-                inscricaoMapper
+                inscricaoMapper,
+                auditoriaService
         );
     }
 }

@@ -24,7 +24,7 @@ public class InscricaoController {
         InscricaoResponseDTO inscricaoCriada = inscricaoService.criar(dto);
 
         return ResponseEntity
-                .status(HttpStatus.CREATED)
+                .status(HttpStatus.ACCEPTED)
                 .body(inscricaoCriada);
     }
 
